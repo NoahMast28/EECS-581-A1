@@ -1,0 +1,633 @@
+Response to prompt 1:
+
+Below is my plan. I’m treating this as a design/planning step only; no final C++ code yet.
+1. Key interpretation from the directions and samples
+
+The most important subtlety is how to treat “garbage” characters.
+
+I will treat a candidate token as a maximal contiguous run of characters from the set:
+text
+
+digits: 0-9
+periods: .
+colons: :
+
+Any other character is garbage. It is ignored, but it also breaks the current candidate run. This is necessary to explain the sample:
+text
+
+192a168.1.1.1  ->  Extracted 168.1.1.1
+
+If a were simply removed, the run would become something like 192168.1.1.1, which is invalid. Instead, a splits the text into two candidate runs:
+text
+
+192          -> invalid
+168.1.1.1    -> valid
+
+So my rule will be:
+
+    Scan left to right.
+
+    Skip non-token characters.
+
+    Collect the next maximal run of token characters.
+
+    Validate that entire run against the IPv4/port grammar.
+
+    If valid, return it.
+
+    If invalid, continue scanning after that run.
+
+    Do not try to extract a valid substring from inside an invalid run. This handles cases like 192.168.1.1. which must be rejected.
+
+I will assume that if multiple valid addresses appear on one line, the program returns the first valid one. The assignment says “a single valid IPv4 address,” so this is the safest interpretation unless the instructor specifies otherwise.
+2. Libraries I plan to use
+
+I want to keep the implementation small and compliant with the restrictions.
+
+Likely includes:
+
+    <iostream> — for std::cin, std::cout, std::getline
+
+    <string> — for std::string
+
+    <cctype> — for std::isdigit
+
+Possibly useful but optional:
+
+    <cstdint> — if I want uint32_t internally, though the required signature uses unsigned long
+
+    <limits> — not necessary unless I want explicit range constants
+
+I will not use:
+
+    atoi, atol, strtol, stoul, stoi, sscanf, scanf numeric conversions
+
+    inet_aton, inet_pton, inet_addr
+
+    std::regex or POSIX regex
+
+    <sstream> numeric extraction
+
+    Any library function that converts a string to a number
+
+std::isdigit is allowed, and I will use it carefully with an unsigned char cast to avoid undefined behavior.
+3. High-level design
+
+I will split the program into three logical parts:
+A. main
+
+Responsibilities:
+
+    Repeatedly print the prompt:
+    text
+
+    Enter a string (or 'END' to quit): 
+
+    Read a full line with std::getline.
+
+    If the line is exactly END, print:
+    text
+
+    Program terminated.
+
+    and exit.
+
+    Otherwise call extractIPv4.
+
+    If successful, print exactly:
+    text
+
+    Extracted IPv4 address: A.B.C.D (decimal value: N, port: P)
+
+    where P is either the port number or none.
+
+    If unsuccessful, print exactly:
+    text
+
+    Invalid input: no valid IPv4 address found
+
+B. extractIPv4
+
+Signature:
+cpp
+
+bool extractIPv4(const std::string& str, unsigned long& outAddress, int& outPort);
+
+Behavior:
+
+    On entry, set defaults:
+
+        outAddress = 0
+
+        outPort = -1
+
+    Scan str left to right.
+
+    Skip non-token characters.
+
+    Find each maximal token run.
+
+    For each run, call a helper validator.
+
+    If the validator succeeds:
+
+        store the 32-bit address in outAddress
+
+        store the port, or -1 if no port, in outPort
+
+        return true
+
+    If no run validates, return false.
+
+C. Candidate validator
+
+I will write a helper, conceptually something like:
+text
+
+validateCandidate(token, outAddress, outPort)
+
+It will:
+
+    Parse exactly four octets separated by periods.
+
+    Enforce octet rules:
+
+        1 to 3 digits
+
+        value 0 to 255
+
+        no leading zero unless the component is exactly "0"
+
+    After the fourth octet, allow either:
+
+        end of token, meaning no port
+
+        a single colon followed by a port
+
+    Enforce port rules:
+
+        1 to 5 digits
+
+        value 0 to 65535
+
+        no leading zero unless the component is exactly "0"
+
+    If a colon is present, the port must be fully valid; otherwise reject the entire candidate, including the address.
+
+    Reject:
+
+        empty octets
+
+        too few or too many octets
+
+        extra periods or colons
+
+        a second colon
+
+        a colon not immediately after the fourth octet
+
+        trailing token characters after the port or address
+
+        any leading-zero violation
+
+    Compute the 32-bit decimal value manually:
+    text
+
+    address = (octet1 << 24) | (octet2 << 16) | (octet3 << 8) | octet4
+
+4. High-level pseudocode
+
+This is pseudocode only, not final C++.
+text
+
+extractIPv4(str, outAddress, outPort):
+    outAddress = 0
+    outPort = -1
+    i = 0
+
+    while i < length(str):
+        while i < length(str) and not isTokenChar(str[i]):
+            i = i + 1
+
+        if i >= length(str):
+            break
+
+        start = i
+
+        while i < length(str) and isTokenChar(str[i]):
+            i = i + 1
+
+        candidate = str[start ... i - 1]
+
+        if validateCandidate(candidate, address, port):
+            outAddress = address
+            outPort = port
+            return true
+
+    return false
+
+text
+
+validateCandidate(candidate, outAddress, outPort):
+    pos = 0
+    octets[4]
+
+    for k from 0 to 3:
+        if pos >= length(candidate):
+            return false
+        if not isDigit(candidate[pos]):
+            return false
+
+        value = 0
+        digits = 0
+        firstChar = candidate[pos]
+
+        while pos < length(candidate) and isDigit(candidate[pos]):
+            if digits >= 3:
+                return false
+
+            value = value * 10 + (candidate[pos] - '0')
+            digits = digits + 1
+            pos = pos + 1
+
+            if value > 255:
+                return false
+
+        if digits == 0:
+            return false
+
+        if digits > 1 and firstChar == '0':
+            return false
+
+        octets[k] = value
+
+        if k < 3:
+            if pos >= length(candidate):
+                return false
+            if candidate[pos] != '.':
+                return false
+
+            pos = pos + 1
+
+            if pos >= length(candidate):
+                return false
+            if not isDigit(candidate[pos]):
+                return false
+
+        else:
+            if pos == length(candidate):
+                port = -1
+
+            else if candidate[pos] == ':':
+                pos = pos + 1
+
+                if pos >= length(candidate):
+                    return false
+                if not isDigit(candidate[pos]):
+                    return false
+
+                portValue = 0
+                portDigits = 0
+                portFirstChar = candidate[pos]
+
+                while pos < length(candidate) and isDigit(candidate[pos]):
+                    if portDigits >= 5:
+                        return false
+
+                    portValue = portValue * 10 + (candidate[pos] - '0')
+                    portDigits = portDigits + 1
+                    pos = pos + 1
+
+                    if portValue > 65535:
+                        return false
+
+                if portDigits == 0:
+                    return false
+
+                if portDigits > 1 and portFirstChar == '0':
+                    return false
+
+                if portValue > 65535:
+                    return false
+
+                if pos != length(candidate):
+                    return false
+
+                port = portValue
+
+            else:
+                return false
+
+    outAddress = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]
+    outPort = port
+    return true
+
+5. Output formatting plan
+
+main will receive only outAddress and outPort from extractIPv4. To print A.B.C.D, I will reconstruct the octets from the 32-bit value:
+text
+
+A = (outAddress >> 24) & 0xFF
+B = (outAddress >> 16) & 0xFF
+C = (outAddress >> 8)  & 0xFF
+D = outAddress & 0xFF
+
+Then:
+
+    If outPort == -1, print none.
+
+    Otherwise print the numeric port.
+
+This keeps the required signature while still allowing the exact display format.
+6. Test plan
+
+I will test the sample run first, then add edge cases.
+
+Given samples:
+
+    connecting to 192.168.1.1 now
+
+    server=10.0.0.255:8080end
+
+    192a168.1.1.1
+
+    192.168.1.1.
+
+    Connection from 192.168.1.1 refused
+
+    192.168.01.1
+
+    1.2.3.4:99999
+
+    12.34.56
+
+    no number here
+
+    END
+
+Additional valid tests:
+
+    0.0.0.0
+
+    255.255.255.255
+
+    1.2.3.4:0
+
+    1.2.3.4:65535
+
+    x1.2.3.4y
+
+    1.2.3.4:80end
+
+    abc 1.2.3.4:80 xyz
+
+Additional invalid tests:
+
+    256.1.1.1
+
+    1.2.3.4:65536
+
+    1.2.3.4:00080
+
+    01.2.3.4
+
+    1.02.3.4
+
+    1.2.3.4:
+
+    1.2.3.4::80
+
+    1.2.3.4:80:90
+
+    1.2.3.4.5
+
+    .1.2.3.4
+
+    1..2.3.4
+
+    1.2.3
+
+    1.2.3.4.
+
+    1.2.3.4:80.5
+
+    1.2.3.4:99999
+
+I will also test the distinction between valid 0.0.0.0 and failure, since both may leave outAddress == 0; the return value must distinguish them.
+7. AI usage and disclosure plan
+
+I will document the AI usage professionally:
+
+    Record the exact GAI tool and version, if known.
+
+    Record the date(s) consulted.
+
+    Save the exact prompts I use.
+
+    Mark which code sections came from the AI and which I wrote or rewrote.
+
+    Explain what I changed and why.
+
+    Confirm that I understand every line of the submitted code.
+
+    State that I tested the program and note any known bugs or limitations.
+
+    Show at least one round where the AI output had a subtle bug and how I found/fixed it.
+
+My prompting strategy will be to give the AI a precise specification, including:
+
+    the exact function signature
+
+    forbidden functions and libraries
+
+    the maximal-token-run interpretation
+
+    leading-zero rules
+
+    range limits
+
+    colon/port rejection rules
+
+    exact output format
+
+    sample cases
+
+Then I will critically review the generated code for the likely failure points: leading zeros, range checks, port-only rejection, candidate splitting, trailing punctuation, and forbidden library calls.
+
+
+
+Response to prompt 2:
+
+```cpp
+#include <iostream>
+#include <string>
+#include <cctype>
+
+// Helper: validates one maximal candidate token and extracts address/port.
+// Returns true on success; on success sets outAddr and outPort.
+// On failure, values are not guaranteed to be meaningful; caller ignores them.
+static bool validateCandidate(const std::string& token,
+                              unsigned long& outAddr,
+                              int& outPort) {
+    const size_t n = token.size();
+    size_t pos = 0;
+    unsigned int octets[4] = {0, 0, 0, 0};
+    int port = -1;
+
+    for (int k = 0; k < 4; ++k) {
+        if (pos >= n) return false;
+        if (!std::isdigit(static_cast<unsigned char>(token[pos]))) return false;
+
+        unsigned int value = 0;
+        int digits = 0;
+        char firstChar = token[pos];
+
+        while (pos < n && std::isdigit(static_cast<unsigned char>(token[pos]))) {
+            if (digits >= 3) return false; // more than 3 digits
+            value = value * 10 + (token[pos] - '0');
+            ++digits;
+            ++pos;
+            if (value > 255) return false;
+        }
+
+        if (digits == 0) return false;
+        if (digits > 1 && firstChar == '0') return false; // leading zero rule
+
+        octets[k] = value;
+
+        if (k < 3) {
+            // Expect a period after the first three octets.
+            if (pos >= n || token[pos] != '.') return false;
+            ++pos; // skip '.'
+            if (pos >= n) return false;
+            if (!std::isdigit(static_cast<unsigned char>(token[pos]))) return false;
+        } else {
+            // After the fourth octet, either end or a valid :port.
+            if (pos == n) {
+                port = -1;
+            } else if (token[pos] == ':') {
+                ++pos; // skip ':'
+                if (pos >= n) return false;
+                if (!std::isdigit(static_cast<unsigned char>(token[pos]))) return false;
+
+                unsigned int pvalue = 0;
+                int pdigits = 0;
+                char pfirstChar = token[pos];
+
+                while (pos < n && std::isdigit(static_cast<unsigned char>(token[pos]))) {
+                    if (pdigits >= 5) return false; // more than 5 digits
+                    pvalue = pvalue * 10 + (token[pos] - '0');
+                    ++pdigits;
+                    ++pos;
+                    if (pvalue > 65535) return false;
+                }
+
+                if (pdigits == 0) return false;
+                if (pdigits > 1 && pfirstChar == '0') return false; // leading zero rule
+                if (pvalue > 65535) return false;
+                if (pos != n) return false; // extra characters after port
+
+                port = static_cast<int>(pvalue);
+            } else {
+                return false; // stray period, colon, or other token char
+            }
+        }
+    }
+
+    // Compute the 32-bit decimal value.
+    unsigned long addr = (static_cast<unsigned long>(octets[0]) << 24) |
+                         (static_cast<unsigned long>(octets[1]) << 16) |
+                         (static_cast<unsigned long>(octets[2]) << 8) |
+                         (static_cast<unsigned long>(octets[3]));
+
+    outAddr = addr;
+    outPort = port;
+    return true;
+}
+
+// Required function prototype.
+// Returns true if a valid address was found, false otherwise.
+// On success: outAddress holds the 32-bit value,
+// and outPort holds the port number, or -1 if no port was present.
+// On failure: outAddress is set to 0 and outPort is set to -1.
+bool extractIPv4(const std::string& str, unsigned long& outAddress, int& outPort) {
+    outAddress = 0;
+    outPort = -1;
+
+    const size_t n = str.size();
+    size_t i = 0;
+
+    auto isTokenChar = [](char c) {
+        return std::isdigit(static_cast<unsigned char>(c)) || c == '.' || c == ':';
+    };
+
+    while (i < n) {
+        // Skip garbage characters.
+        while (i < n && !isTokenChar(str[i])) {
+            ++i;
+        }
+        if (i >= n) break;
+
+        // Collect a maximal run of token characters.
+        size_t start = i;
+        while (i < n && isTokenChar(str[i])) {
+            ++i;
+        }
+
+        std::string candidate = str.substr(start, i - start);
+
+        unsigned long addr = 0;
+        int port = -1;
+        if (validateCandidate(candidate, addr, port)) {
+            outAddress = addr;
+            outPort = port;
+            return true;
+        }
+        // If invalid, continue scanning after this run.
+    }
+
+    return false;
+}
+
+int main() {
+    std::string line;
+
+    while (true) {
+        std::cout << "Enter a string (or 'END' to quit): ";
+        if (!std::getline(std::cin, line)) {
+            break; // input stream ended
+        }
+
+        if (line == "END") {
+            std::cout << "Program terminated." << std::endl;
+            break;
+        }
+
+        unsigned long outAddress = 0;
+        int outPort = -1;
+
+        if (extractIPv4(line, outAddress, outPort)) {
+            unsigned int a = (outAddress >> 24) & 0xFF;
+            unsigned int b = (outAddress >> 16) & 0xFF;
+            unsigned int c = (outAddress >> 8) & 0xFF;
+            unsigned int d = outAddress & 0xFF;
+
+            std::cout << "Extracted IPv4 address: "
+                      << a << "." << b << "." << c << "." << d
+                      << " (decimal value: " << outAddress << ", port: ";
+
+            if (outPort == -1) {
+                std::cout << "none";
+            } else {
+                std::cout << outPort;
+            }
+
+            std::cout << ")" << std::endl;
+        } else {
+            std::cout << "Invalid input: no valid IPv4 address found" << std::endl;
+        }
+    }
+
+    return 0;
+}
+```
